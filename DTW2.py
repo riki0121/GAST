@@ -1,42 +1,35 @@
 import numpy as np
-import japanize_matplotlib
 import matplotlib.pyplot as plt
-from fastdtw import fastdtw
-from scipy.spatial.distance import euclidean
+import japanize_matplotlib  # 日本語対応（任意）
 
-# --- データ読み込み ---
-file_path = 'output/my_pitching1.npz'
-file_path2 = 'output/my_pitching_slow.npz'
-data = np.load(file_path)
-data2 = np.load(file_path2)
+# --- キーポイントごとの距離を計算する関数 ---
+def calc_joint_diff(pose1, pose2):
 
-reconstruction_data = data['reconstruction']
-reconstruction_data2 = data2['reconstruction']
+    joint_diffs = np.zeros((17, min_length))  # shape = (17, min_length)
 
-prediction = reconstruction_data[0]   # (フレーム数1, 17, 3)
-prediction2 = reconstruction_data2[0] # (フレーム数2, 17, 3)
+    for frame in range(min_length): #１フレームごとにループ
+        for i in range(17): # 17キーポイント分ループ
+            joint_diffs[i, frame] = np.linalg.norm(pose1[frame, i] - pose2[frame, i]) # 各キーポイントの距離を計算
 
-# --- DTWでフレーム対応を取得（17関節→51次元で）
-form1 = prediction.reshape(prediction.shape[0], -1)  # (T1, 51)
-form2 = prediction2.reshape(prediction2.shape[0], -1)
+    return joint_diffs
 
-distance, path = fastdtw(form1, form2, dist=euclidean, radius=1)
-print(f"DTW距離: {distance:.2f}")
-print(f"対応フレーム数: {len(path)}")
+# --- ファイル読み込み ---
+data1 = np.load("output/my_pitching1.npz")  # 通常フォーム
+data2 = np.load("output/my_pitching_slow.npz")  # 比較対象フォーム
 
-# --- 各関節ごとのユークリッド距離差（DTW後）を格納 ---
-joint_diffs = [[] for _ in range(17)]  # 各関節の差分を格納するリスト
+pose1 = data1["reconstruction"][0]  # (フレーム数, 17, 3)
+pose2 = data2["reconstruction"][0]
 
-for i, j in path:
-    for k in range(17):
-        joint1 = prediction[i, k]
-        joint2 = prediction2[j, k]
-        diff = np.linalg.norm(joint1 - joint2)
-        joint_diffs[k].append(diff)
+# --- 距離をフレームごとに計算 ---
+min_length = min(len(pose1), len(pose2))  # 共通のフレーム数で揃える
+    
 
-# --- グラフ描画 ---
-plt.figure(figsize=(14, 7))
-x = range(len(path))
+# 距離を計算
+joint_diffs = calc_joint_diff(pose1, pose2)
+
+# グラフプロット
+plt.figure(figsize=(12, 6))
+x = np.arange(joint_diffs.shape[1])
 
 # GASTのキーポイントに対応するラベル
 keypoint_labels = [
@@ -59,15 +52,17 @@ keypoint_labels = [
     "右手首",      # 16
 ]
 
-# グラフ描画（例）
-for joint_idx in range(17):
-    plt.plot(x, joint_diffs[joint_idx], label=f'{keypoint_labels[joint_idx]}')
+# 抽出したいキーポイントのインデックス
+selected_joints = [7, 11, 14, 12, 15]  #背骨、左肩、右肩、左肘、右肘
+selected_labels = ["背骨", "左肩", "右肩", "左肘", "右肘"]
 
-    
-plt.title("各キーポイントのユークリッド距離差（DTW後）")
-plt.xlabel("対応フレーム番号（DTW）")
+for i, joint_idx in enumerate(selected_joints):
+    plt.plot(x, joint_diffs[joint_idx], label=f'{selected_labels[i]}')
+
+plt.xlabel("対応フレーム番号")
 plt.ylabel("距離差（3D空間）")
-plt.legend(loc='upper right', fontsize=8)
-plt.grid(True)
+plt.title("各キーポイントのユークリッド距離差（DTW前)")
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
 plt.tight_layout()
+plt.grid(True)
 plt.show()

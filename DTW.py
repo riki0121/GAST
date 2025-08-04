@@ -24,11 +24,33 @@ reconstruction_data2 = data2['reconstruction']
 prediction = reconstruction_data[0]   # (フレーム数1, 17, 3)
 prediction2 = reconstruction_data2[0] # (フレーム数2, 17, 3)
 
+print(f"prediction_shape: {prediction.shape}")
+print(f"prediction2 shape: {prediction2.shape}")
+
+frame1 = len(prediction[:,0,0])  #dataのフレーム数
+frame2 = len(prediction2[:,0,0])#data2のフレーム数
+
 # --- DTWでフレーム対応を取得（キーポイント別距離計算で）---
 distance, path = fastdtw(prediction, prediction2, dist=pose_distance, radius=1)
 print(f"DTW距離: {distance:.2f}")
 print(f"対応フレーム数: {len(path)}")
 
+min_frame = min(frame1,frame2)
+
+seen = set()
+filtered_path = []
+for i, j in path:
+    if i not in seen:
+        filtered_path.append((i, j))
+        seen.add(i)
+    if len(filtered_path) >= min_frame:
+        break
+
+print(f"filtered_pathの長さ: {len(filtered_path)}")  # 小さい方のフレーム数と一致する
+
+path = filtered_path 
+
+print(path)
 # --- 各関節ごとのユークリッド距離差（DTW後）を格納 ---
 joint_diffs = [[] for _ in range(17)]  # 各関節の差分を格納するリスト
 
@@ -65,9 +87,14 @@ keypoint_labels = [
     "右手首",      # 16
 ]
 
-# グラフ描画
-for joint_idx in range(17):
-    plt.plot(x, joint_diffs[joint_idx], label=f'{keypoint_labels[joint_idx]}')
+
+
+# 抽出したいキーポイントのインデックス
+selected_joints = [7, 11, 14, 12, 15]  #背骨、左肩、右肩、左肘、右肘
+selected_labels = ["背骨", "左肩", "右肩", "左肘", "右肘"]
+
+for i, joint_idx in enumerate(selected_joints):
+    plt.plot(x, joint_diffs[joint_idx], label=f'{selected_labels[i]}')
 
 plt.title("各キーポイントのユークリッド距離差（DTW後)")
 plt.xlabel("対応フレーム番号（DTW）")
