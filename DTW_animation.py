@@ -7,7 +7,9 @@ from matplotlib.widgets import Button, TextBox
 from common.camera import normalize_screen_coordinates, world_to_camera
 from tensorflow.keras.models import load_model
 from common.camera import world_to_camera
-from matplotlib.widgets import Button
+from fastdtw import fastdtw
+
+
 
 # 回転行列とスケーリング比率
 rot = np.array([0.14070565, -0.15007018, -0.7552408, 0.62232804], dtype=np.float32)
@@ -16,17 +18,34 @@ ratio = 101.72144
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 
+# --- キーポイント別距離計算関数 ---
+def pose_distance(pose1, pose2):
+    """2つの3D姿勢間の距離を計算（各キーポイントの3D距離の平均）"""
+    total_distance = 0.0
+    for i in range(17):
+        keypoint_distance = np.linalg.norm(pose1[i] - pose2[i])#２つのフォームの座標間の距離を計算
+        total_distance += keypoint_distance
+    return total_distance / 17.0
+
+
 # npzファイルのパス
 file_path = 'output/my_pitching1.npz'
-file_data = np.load(file_path)
+data = np.load(file_path)
+
+# 追加: 2つ目のフォーム
+file_path2 = 'output/my_pitching_slow.npz'
+data2 = np.load(file_path2)
+reconstruction_data2 = data2['reconstruction']
+
+
 
 # npzファイルからデータを読み込む
 data = np.load(file_path) 
 model = load_model('lstm_model.h5')
 reconstruction_data = data['reconstruction']
 
-key = file_data.files[0]
-X = file_data[key]
+key = data.files[0]
+X = data[key]
 
 if X.shape[0] == 1:
     X = X[0]
@@ -61,38 +80,65 @@ else:
 #1フレームごとにワールド座標からカメラ座標に変換。
 list_from_reconstruction_world= [reconstruction_data[i] for i in range(len(reconstruction_data))]
 list_from_reconstruction_camera = []
-print("list_from_reconstruction_world:", list_from_reconstruction_world[0].shape)
+
+# 2つ目もカメラ座標に変換
+list_from_reconstruction_world2 = [reconstruction_data2[i] for i in range(len(reconstruction_data2))]
+list_from_reconstruction_camera2 = []
+
 
 prediction = list_from_reconstruction_world[0]  # 1フレーム分 (17, 3)
-print("prediction.shape:",prediction.shape)
-
+prediction2 = list_from_reconstruction_world2[0]  # 1フレーム分 (17, 3)
 
 list_from_reconstruction_camera = []
 
 joint_index = first_joint_index  # 初期値は識別結果に基づく
 
-Total_frames = prediction.shape[0] #フレームの総数
+frame1 = prediction.shape[0] #フレームの総数
+frame2 = prediction2.shape[0]
 
-y_3 = prediction[0,3,1]
-y_6 = prediction[0,6,1]
+
+# --- DTWでフレーム対応を取得（キーポイント別距離計算で）---
+distance, path = fastdtw(prediction, prediction2, dist=pose_distance, radius=1)
+print(f"DTW距離: {distance:.2f}")
+print(f"対応フレーム数: {len(path)}")
+
+min_frame = min(frame1,frame2)
+
+seen = set()
+filtered_path = []
+for i, j in path:
+    if i not in seen:
+        filtered_path.append((i, j))
+        seen.add(i)
+    if len(filtered_path) >= min_frame:
+        break
+
+print(f"filtered_pathの長さ: {len(filtered_path)}")  # 小さい方のフレーム数と一致する
+
+
+y1_3 = prediction[0, 3, 1]
+y1_6 = prediction[0, 6, 1]
+
+y2_3 = prediction2[0, 3, 1]
+y2_6 = prediction2[0, 6, 1]
 
 
 # 全フレームに対して処理（prediction.shape[0]はフレームの総数
-for i in range(Total_frames):
+for i in range(frame1):
 
     #y配列を定義（参照しやすくするため）
-    y = {3:y_3, 6:y_6}
+    y = {3:y1_3, 6:y1_6}
 
     # 30フレーム目以降はから3か6を判定、それ以前は固定のインデックスを使う
     if i > 0 :
         if first_joint_index == 3:  # 右投げならば
-            if y_3 <= y_6:
+            if y1_3 <= y1_6:
                 joint_index = 6
             else:
                 joint_index = 3 
         
         elif first_joint_index == 6: #左投げならば
-            if y_3 >= y_6:
+            if y1_3 >= y1_6:
                 joint_index = 3
             else:
                 joint_index = 6 
@@ -101,63 +147,55 @@ for i in range(Total_frames):
     
 
     # 基準となるキーポイントの座標を取得
-    joint = prediction[i, joint_index, :]  #i番目のフレーム、joint_index番目のキーポイントの(x,y,z)の座標である
+    joint = prediction[i, joint_index, :]                          # i番目のフレーム、joint_index番目のキーポイントの(x,y,z)の座標である
+    keypoints_world = list_from_reconstruction_world[0][i]         # shape: (17, 3),i番目のフレームの17個のキーポイント座標を取得
+    sub_prediction = world_to_camera(keypoints_world, R=rot, t=0)  # ワールド座標 → カメラ座標へ変換
+    sub_prediction = sub_prediction * ratio                        # スケーリング
+    y_offset = sub_prediction[joint_index, 1]                      # この関節のy位置
+    sub_prediction[:, 1] = sub_prediction[:, 1] - y_offset         # y=0にする
+    list_from_reconstruction_camera.append(sub_prediction)         # 変換後データをリストに追加
 
-    # i番目のフレームの17個のキーポイント座標を取得
-    keypoints_world = list_from_reconstruction_world[0][i]  # shape: (17, 3)
+    # 更新
+    y1_3 = sub_prediction[3, 1]
+    y1_6 = sub_prediction[6, 1]
 
-    sub_prediction = keypoints_world   # shape: (17, 3)
+# 2つ目のフォームも同様に処理
+for i in range(frame2):
 
-        # ワールド座標 → カメラ座標へ変換
-    sub_prediction = world_to_camera(sub_prediction, R=rot, t=0)
+    #y配列を定義（参照しやすくするため）
+    y = {3:y2_3, 6:y2_6}
 
-    # スケーリング
-    sub_prediction = sub_prediction * ratio
+    # 30フレーム目以降はから3か6を判定、それ以前は固定のインデックスを使う
+    if i > 0 :
+        if first_joint_index == 3:  # 右投げならば
+            if y2_3 <= y2_6:
+                joint_index = 6
+            else:
+                joint_index = 3 
+        
+        elif first_joint_index == 6: #左投げならば
+            if y2_3 >= y2_6:
+                joint_index = 3
+            else:
+                joint_index = 6 
+    else:
+        joint_index = first_joint_index  
 
-    # y方向オフセット
-    y_offset = sub_prediction[joint_index, 1]  # この関節のy位置
-    sub_prediction[:, 1] = sub_prediction[:, 1] - y_offset  # y=0にする
-
-    # 変換後データをリストに追加
-    list_from_reconstruction_camera.append(sub_prediction)
-
-    #更新
-    y_3 = sub_prediction[3,1]
-    y_6 = sub_prediction[6,1]
-
-
-
-# 追加: 2つ目のフォーム
-file_path2 = 'output/my_pitching_slow.npz'
-data2 = np.load(file_path2)
-reconstruction_data2 = data2['reconstruction']
-
-# 2つ目もカメラ座標に変換
-list_from_reconstruction_world2 = [reconstruction_data2[i] for i in range(len(reconstruction_data2))]
-list_from_reconstruction_camera2 = []
-
-Total_frames2 = list_from_reconstruction_world2[0].shape[0]
-
-for i in range(Total_frames2):
     keypoints_world2 = list_from_reconstruction_world2[0][i]
     sub_prediction2 = world_to_camera(keypoints_world2, R=rot, t=0)
     sub_prediction2 = sub_prediction2 * ratio
-
-    # y方向オフセット（1種類目と揃えるなら同じ関節にしてもOK）
-    joint2 = sub_prediction2[first_joint_index]
-    y_offset2 = joint2[1]
-    sub_prediction2[:, 1] -= y_offset2
-
+    
+    y_offset2 = sub_prediction2[joint_index, 1]  # この関節のy位置
+    sub_prediction2[:, 1] = sub_prediction2[:, 1]  - y_offset2
     list_from_reconstruction_camera2.append(sub_prediction2)
 
-reconstruction_data_camera2 = np.array(list_from_reconstruction_camera2)
-
-
-
+            # 更新
+    y2_3 = sub_prediction2[3, 1]
+    y2_6 = sub_prediction2[6, 1]
 
 # 最後に numpy 配列へ変換
 list_from_reconstruction_camera = np.array(list_from_reconstruction_camera)
-
+list_from_reconstruction_camera2 = np.array(list_from_reconstruction_camera2)
 
 #relativeは16番目の関節の座標
 relative = list_from_reconstruction_camera[0][16]
@@ -166,12 +204,32 @@ relative = list_from_reconstruction_camera[0][16]
 print(f'list_from_reconstruction_camera: {(list_from_reconstruction_camera[0][0])}')
 
 reconstruction_data_camera = list_from_reconstruction_camera
+reconstruction_data_camera2 = list_from_reconstruction_camera2
 
 output_file_path= 'output0_rot_camera.npz'
 np.savez(output_file_path, reconstruction_camera=list_from_reconstruction_camera)
 
 print(f'Data saved to {output_file_path}')
 
+# --- DTW path に基づいて、data2 を整列させる ---
+aligned_data1 = []
+aligned_data2 = []
+counter = 0
+
+max_frames = 130
+print(f"max_frames: {max_frames}")
+print(f"len(reconstruction_data_camera): {len(reconstruction_data_camera)}")
+print(f"len(reconstruction_data_camera2): {len(reconstruction_data_camera2)}")
+
+for i, j in filtered_path:
+    if i < len(reconstruction_data_camera) and j < len(reconstruction_data_camera2):
+        aligned_data1.append(reconstruction_data_camera[i])
+        aligned_data2.append(reconstruction_data_camera2[j])
+        counter += 1
+
+print(f'counter:{counter}, i:{i}, j:{j}')
+aligned_data1 = np.array(aligned_data1)
+aligned_data2 = np.array(aligned_data2)
 
 
 # 骨格の関節の親子関係（例: Human3.6Mの骨格）
@@ -231,8 +289,8 @@ def plot_dual_skeleton_animation(data1, data2):
     lines1 = [ax.plot([x1[i], x1[j]], [y1[i], y1[j]], [z1[i], z1[j]], 'b')[0] for i, j in skeleton_connections]
     lines2 = [ax.plot([x2[i], x2[j]], [y2[i], y2[j]], [z2[i], z2[j]], 'r')[0] for i, j in skeleton_connections]
 
-    texts1 = [ax.text(x1[i], y1[i], z1[i], str(i), color='black', fontsize=6) for i in range(len(x1))]
-    texts2 = [ax.text(x2[i], y2[i], z2[i], str(i), color='darkred', fontsize=6) for i in range(len(x2))]
+    texts1 = [ax.text(x1[i], y1[i], z1[i], str(i), color='black', fontsize=1) for i in range(len(x1))]
+    texts2 = [ax.text(x2[i], y2[i], z2[i], str(i), color='darkred', fontsize=1) for i in range(len(x2))]
 
     all_points = np.concatenate(data1)
     x_mean = np.mean(all_points[:, 0])
@@ -263,4 +321,4 @@ def plot_dual_skeleton_animation(data1, data2):
     return ani
 
 # reconstruction_dataをアニメーションとして可視化
-plot_dual_skeleton_animation(reconstruction_data_camera, reconstruction_data_camera2)
+plot_dual_skeleton_animation(aligned_data1, aligned_data2)
