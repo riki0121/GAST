@@ -2,6 +2,21 @@
 # GAST
 単眼カメラで撮影された動画を入力とし，3次元姿勢推定モデルGASTを用いて，3次元骨格座標を推定します.
 
+
+## 必要なパッケージのインストール法
+```
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+```
+
+```
+pip install fastdtw
+```
+
+* fastdtwのインストール
+
+
+
 ## プログラムの仕様
 
 ### output
