@@ -1,7 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Button, TextBox
@@ -9,8 +8,6 @@ from common.camera import normalize_screen_coordinates, world_to_camera
 from tensorflow.keras.models import load_model
 from common.camera import world_to_camera
 from fastdtw import fastdtw
-
-
 
 # 回転行列とスケーリング比率
 rot = np.array([0.14070565, -0.15007018, -0.7552408, 0.62232804], dtype=np.float32)
@@ -29,7 +26,73 @@ def pose_distance(pose1, pose2):
     return total_distance / 17.0
 
 
-# npzファイルのパス
+def distance_to_score(dist, max_dist):
+    """
+    距離をスコア(0~100)に変換する関数
+    max_dist以上ならスコア0
+    """
+    score = (1 - dist / max_dist) * 100
+    score = max(0, min(100,score))  #0~100に収める
+
+    if score > 99.5:
+        score = 100
+
+    return score
+
+
+def cal_scores(form1, form2, max_dist, size=20):
+    """
+    2つのフォームの類似度スコアを算出する関数
+    size: 何フレームごとにスコアを出すか
+    max_dist: この距離以上ならスコア0
+    
+    スコアをまとめたリスト(results)を返す
+    """
+
+    frames = min(len(form1), len(form2))
+    num = frames // size          # スコアを出す回数
+
+    results = []
+
+    # 部位ラベルと関節番号
+    keypoint_labels = ["左肩", "左肘", "右肩", "右肘"]
+    keypoint_nums   = [11, 12, 14, 15]
+
+    for i in range(num):
+        start = i * size
+        end = start + size
+        seg1 = form1[start:end]  # (size, 17, 3)
+        seg2 = form2[start:end]
+
+        # --- 全関節の距離 ---
+        all_dists = []
+        for i in range(len(seg1)):      # 各フレーム
+            for j in range(17):        # 各関節
+                all_dists.append(np.linalg.norm(seg1[i, j] - seg2[i, j]))
+
+        mean_dist = np.mean(all_dists)
+        overall_score = distance_to_score(mean_dist, max_dist)
+
+        # --- 部位ごとのスコア ---
+        part_scores = {}
+        for label, i in zip(keypoint_labels, keypoint_nums):#zipでラベルと関節を同時に取得
+            part_dists = []
+
+            for k in range(len(seg1)):
+                part_dists.append(np.linalg.norm(seg1[k, i] - seg2[k, i]))
+            mean_part_dist = np.mean(part_dists)
+            part_scores[label] = distance_to_score(mean_part_dist, max_dist)
+
+        results.append({
+            "segment": f"{start}-{end}",
+            "overall": overall_score,
+            "parts": part_scores
+        })
+
+    return results
+
+
+    # npzファイルのパス
 file_path = 'output/my_pitching1.npz'
 data = np.load(file_path)
 
@@ -239,93 +302,21 @@ for i in range(len(aligned_data1)):
     diff = hip1 - hip2        # 座標の差分を計算
     aligned_data2[i] += diff  # form2 を平行移動
 
-# 骨格の関節の親子関係（例: Human3.6Mの骨格）
-skeleton_connections = [
-    (8, 9), (9, 10), # 頭部
-    (0, 1), (0, 4), (0, 7), (7, 8), (1, 14), (4, 11),  # 胴体
-    (8, 11), (11, 12), (12, 13),  # 左腕
-    (8, 14), (14, 15), (15, 16),  # 右腕
-    (4, 5), (5, 6),  # 左脚
-    (1, 2), (2, 3),  # 右脚
-]
+scores = cal_scores(aligned_data1, aligned_data2, 50 ,size=20)
 
 
-def update_dual(frame_idx, scat1, scat2, lines1, lines2, texts1, texts2, frame_text, data1, data2):
-    frame1 = data1[frame_idx]
-    frame2 = data2[frame_idx % len(data2)]  # フレーム数が違う場合にも対応
+# scores の中身を1つずつ取り出して表示する
+for score in scores:
+    # どのフレーム区間かを表示
+    print("-----", score["segment"], "フレーム -----")
 
-    x1, y1, z1 = frame1[:, 0], frame1[:, 1], frame1[:, 2]
-    x2, y2, z2 = frame2[:, 0], frame2[:, 1], frame2[:, 2]
+    # 全体のスコアを表示
+    print(" 全体スコア:", f"{score['overall']:.1f}点")
 
-    scat1._offsets3d = (x1, y1, z1)
-    scat2._offsets3d = (x2, y2, z2)
+    # 部位ごとのスコアを表示
+    for part, s in score["parts"].items():
+        # 例: part = "左肩", score = 85.2
+        print(" ", part, ":", f"{s:.1f}点")
 
-    for line, (i, j) in zip(lines1, skeleton_connections):
-        line.set_data([x1[i], x1[j]], [y1[i], y1[j]])
-        line.set_3d_properties([z1[i], z1[j]])
-
-    for line, (i, j) in zip(lines2, skeleton_connections):
-        line.set_data([x2[i], x2[j]], [y2[i], y2[j]])
-        line.set_3d_properties([z2[i], z2[j]])
-
-    for i, text in enumerate(texts1):
-        text.set_position((x1[i], y1[i]))
-        text.set_3d_properties(z1[i], 'z')
-
-    for i, text in enumerate(texts2):
-        text.set_position((x2[i], y2[i]))
-        text.set_3d_properties(z2[i], 'z')
-
-    frame_text.set_text(f'Frame: {frame_idx}')
-    return scat1, scat2, lines1, lines2, texts1, texts2, frame_text
-
-
-
-def plot_dual_skeleton_animation(data1, data2):
-    global ani
-    fig = plt.figure(figsize=(10, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    fig.canvas.manager.set_window_title('Dual Camera Coordinate')
-
-    x1, y1, z1 = data1[0][:, 0], data1[0][:, 1], data1[0][:, 2]
-    x2, y2, z2 = data2[0][:, 0], data2[0][:, 1], data2[0][:, 2]
-
-    scat1 = ax.scatter(x1, y1, z1, c='blue', marker='o', label='Form 1')
-    scat2 = ax.scatter(x2, y2, z2, c='red', marker='o', label='Form 2')
-
-    lines1 = [ax.plot([x1[i], x1[j]], [y1[i], y1[j]], [z1[i], z1[j]], 'b')[0] for i, j in skeleton_connections]
-    lines2 = [ax.plot([x2[i], x2[j]], [y2[i], y2[j]], [z2[i], z2[j]], 'r')[0] for i, j in skeleton_connections]
-
-    texts1 = [ax.text(x1[i], y1[i], z1[i], str(i), color='black', fontsize=1) for i in range(len(x1))]
-    texts2 = [ax.text(x2[i], y2[i], z2[i], str(i), color='darkred', fontsize=1) for i in range(len(x2))]
-
-    all_points = np.concatenate(data1)
-    x_mean = np.mean(all_points[:, 0])
-    y_mean = np.mean(all_points[:, 1])
-    z_mean = np.mean(all_points[:, 2])
-    ax.set_xlim([x_mean - 100, x_mean + 100])
-    ax.set_ylim([-200, 0])
-    ax.set_zlim([z_mean - 100, z_mean + 100])
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.view_init(elev=-90, azim=-90)
-
-    X_floor, Z_floor = np.meshgrid(np.linspace(x_mean - 100, x_mean + 100, 10),
-                                   np.linspace(z_mean - 100, z_mean + 100, 10))
-    Y_floor = np.zeros_like(X_floor)
-    ax.plot_surface(X_floor, Y_floor, Z_floor, alpha=0.5, color='gray', edgecolor='none')
-
-    frame_text = ax.text2D(0.85, 0.95, "", transform=ax.transAxes, fontsize=10)
-    frame_idx = [0]
-
-    ani = FuncAnimation(fig, update_dual,
-                    fargs=(scat1, scat2, lines1, lines2, texts1, texts2, frame_text,
-                           data1, data2),  # ← data1, data2はNumPy配列
-                    frames=len(data1), interval=100, blit=False)
-    plt.legend()
-    plt.show()
-    return ani
-
-# reconstruction_dataをアニメーションとして可視化
-plot_dual_skeleton_animation(aligned_data1, aligned_data2)
+    # 見やすいように空行を入れる
+    print()

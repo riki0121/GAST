@@ -211,6 +211,36 @@ np.savez(output_file_path, reconstruction_camera=list_from_reconstruction_camera
 
 print(f'Data saved to {output_file_path}')
 
+# --- DTW path に基づいて、data2 を整列させる ---
+aligned_data1 = []
+aligned_data2 = []
+counter = 0
+
+max_frames = 130
+print(f"max_frames: {max_frames}")
+print(f"len(reconstruction_data_camera): {len(reconstruction_data_camera)}")
+print(f"len(reconstruction_data_camera2): {len(reconstruction_data_camera2)}")
+
+for i, j in filtered_path:
+    if i < len(reconstruction_data_camera) and j < len(reconstruction_data_camera2):
+        aligned_data1.append(reconstruction_data_camera[i])
+        aligned_data2.append(reconstruction_data_camera2[j])
+        counter += 1
+
+print(f'counter:{counter}, i:{i}, j:{j}')
+
+
+aligned_data1 = np.array(aligned_data1)
+aligned_data2 = np.array(aligned_data2)
+
+
+for i in range(len(aligned_data1)):
+    hip1 = aligned_data1[i, 0]  # form1 の腰
+    hip2 = aligned_data2[i, 0]  # form2 の腰
+    diff = hip1 - hip2        # 座標の差分を計算
+    aligned_data2[i] += diff  # form2 を平行移動
+
+
 
 
 # 骨格の関節の親子関係（例: Human3.6Mの骨格）
@@ -302,4 +332,4 @@ def plot_dual_skeleton_animation(data1, data2):
     return ani
 
 # reconstruction_dataをアニメーションとして可視化
-plot_dual_skeleton_animation(reconstruction_data_camera, reconstruction_data_camera2)
+plot_dual_skeleton_animation(aligned_data1, aligned_data2)

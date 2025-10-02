@@ -1,7 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Button, TextBox
@@ -78,16 +77,11 @@ else:
     print("右投げと識別。")
     first_joint_index = 3
 
-#1フレームごとにワールド座標からカメラ座標に変換。
-list_from_reconstruction_world= [reconstruction_data[i] for i in range(len(reconstruction_data))]
-list_from_reconstruction_camera = []
 
 # 2つ目もカメラ座標に変換
 list_from_reconstruction_world2 = [reconstruction_data2[i] for i in range(len(reconstruction_data2))]
 list_from_reconstruction_camera2 = []
 
-
-prediction = list_from_reconstruction_world[0]  # 1フレーム分 (17, 3)
 prediction2 = list_from_reconstruction_world2[0]  # 1フレーム分 (17, 3)
 
 list_from_reconstruction_camera = []
@@ -124,41 +118,7 @@ y2_3 = prediction2[0, 3, 1]
 y2_6 = prediction2[0, 6, 1]
 
 
-# 全フレームに対して処理（prediction.shape[0]はフレームの総数
-for i in range(frame1):
 
-    #y配列を定義（参照しやすくするため）
-    y = {3:y1_3, 6:y1_6}
-
-    # 30フレーム目以降はから3か6を判定、それ以前は固定のインデックスを使う
-    if i > 0 :
-        if first_joint_index == 3:  # 右投げならば
-            if y1_3 <= y1_6:
-                joint_index = 6
-            else:
-                joint_index = 3 
-        
-        elif first_joint_index == 6: #左投げならば
-            if y1_3 >= y1_6:
-                joint_index = 3
-            else:
-                joint_index = 6 
-    else:
-        joint_index = first_joint_index  
-    
-
-    # 基準となるキーポイントの座標を取得
-    joint = prediction[i, joint_index, :]                          # i番目のフレーム、joint_index番目のキーポイントの(x,y,z)の座標である
-    keypoints_world = list_from_reconstruction_world[0][i]         # shape: (17, 3),i番目のフレームの17個のキーポイント座標を取得
-    sub_prediction = world_to_camera(keypoints_world, R=rot, t=0)  # ワールド座標 → カメラ座標へ変換
-    sub_prediction = sub_prediction * ratio                        # スケーリング
-    y_offset = sub_prediction[joint_index, 1]                      # この関節のy位置
-    sub_prediction[:, 1] = sub_prediction[:, 1] - y_offset         # y=0にする
-    list_from_reconstruction_camera.append(sub_prediction)         # 変換後データをリストに追加
-
-    # 更新
-    y1_3 = sub_prediction[3, 1]
-    y1_6 = sub_prediction[6, 1]
 
 # 2つ目のフォームも同様に処理
 for i in range(frame2):
@@ -185,24 +145,19 @@ for i in range(frame2):
     keypoints_world2 = list_from_reconstruction_world2[0][i]
     sub_prediction2 = world_to_camera(keypoints_world2, R=rot, t=0)
     sub_prediction2 = sub_prediction2 * ratio
-    
-    y_offset2 = sub_prediction2[joint_index, 1]  # この関節のy位置
-    sub_prediction2[:, 1] = sub_prediction2[:, 1]  - y_offset2
-    list_from_reconstruction_camera2.append(sub_prediction2)
 
-            # 更新
+    joint2 = sub_prediction2[first_joint_index]
+    y_offset2 = joint2[1]
+    sub_prediction2[:, 1] -= y_offset2
+
+        # 更新
     y2_3 = sub_prediction2[3, 1]
     y2_6 = sub_prediction2[6, 1]
 
-# 最後に numpy 配列へ変換
-list_from_reconstruction_camera = np.array(list_from_reconstruction_camera)
+    list_from_reconstruction_camera2.append(sub_prediction2)
+
 list_from_reconstruction_camera2 = np.array(list_from_reconstruction_camera2)
 
-#relativeは16番目の関節の座標
-relative = list_from_reconstruction_camera[0][16]
-
-#最初のフレームの関節座標データを表示
-print(f'list_from_reconstruction_camera: {(list_from_reconstruction_camera[0][0])}')
 
 reconstruction_data_camera = list_from_reconstruction_camera
 reconstruction_data_camera2 = list_from_reconstruction_camera2
@@ -213,7 +168,7 @@ np.savez(output_file_path, reconstruction_camera=list_from_reconstruction_camera
 print(f'Data saved to {output_file_path}')
 
 # --- DTW path に基づいて、data2 を整列させる ---
-aligned_data1 = []
+
 aligned_data2 = []
 counter = 0
 
@@ -224,20 +179,13 @@ print(f"len(reconstruction_data_camera2): {len(reconstruction_data_camera2)}")
 
 for i, j in filtered_path:
     if i < len(reconstruction_data_camera) and j < len(reconstruction_data_camera2):
-        aligned_data1.append(reconstruction_data_camera[i])
+
         aligned_data2.append(reconstruction_data_camera2[j])
         counter += 1
 
 print(f'counter:{counter}, i:{i}, j:{j}')
-aligned_data1 = np.array(aligned_data1)
 aligned_data2 = np.array(aligned_data2)
 
-
-for i in range(len(aligned_data1)):
-    hip1 = aligned_data1[i, 0]  # form1 の腰
-    hip2 = aligned_data2[i, 0]  # form2 の腰
-    diff = hip1 - hip2        # 座標の差分を計算
-    aligned_data2[i] += diff  # form2 を平行移動
 
 # 骨格の関節の親子関係（例: Human3.6Mの骨格）
 skeleton_connections = [
@@ -287,16 +235,13 @@ def plot_dual_skeleton_animation(data1, data2):
     ax = fig.add_subplot(111, projection='3d')
     fig.canvas.manager.set_window_title('Dual Camera Coordinate')
 
-    x1, y1, z1 = data1[0][:, 0], data1[0][:, 1], data1[0][:, 2]
+
     x2, y2, z2 = data2[0][:, 0], data2[0][:, 1], data2[0][:, 2]
 
-    scat1 = ax.scatter(x1, y1, z1, c='blue', marker='o', label='Form 1')
     scat2 = ax.scatter(x2, y2, z2, c='red', marker='o', label='Form 2')
 
-    lines1 = [ax.plot([x1[i], x1[j]], [y1[i], y1[j]], [z1[i], z1[j]], 'b')[0] for i, j in skeleton_connections]
     lines2 = [ax.plot([x2[i], x2[j]], [y2[i], y2[j]], [z2[i], z2[j]], 'r')[0] for i, j in skeleton_connections]
 
-    texts1 = [ax.text(x1[i], y1[i], z1[i], str(i), color='black', fontsize=1) for i in range(len(x1))]
     texts2 = [ax.text(x2[i], y2[i], z2[i], str(i), color='darkred', fontsize=1) for i in range(len(x2))]
 
     all_points = np.concatenate(data1)
@@ -320,7 +265,7 @@ def plot_dual_skeleton_animation(data1, data2):
     frame_idx = [0]
 
     ani = FuncAnimation(fig, update_dual,
-                    fargs=(scat1, scat2, lines1, lines2, texts1, texts2, frame_text,
+                    fargs=(scat2, lines2, texts2, frame_text,
                            data1, data2),  # ← data1, data2はNumPy配列
                     frames=len(data1), interval=100, blit=False)
     plt.legend()
@@ -328,4 +273,4 @@ def plot_dual_skeleton_animation(data1, data2):
     return ani
 
 # reconstruction_dataをアニメーションとして可視化
-plot_dual_skeleton_animation(aligned_data1, aligned_data2)
+plot_dual_skeleton_animation(aligned_data2)
